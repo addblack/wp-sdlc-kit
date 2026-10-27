@@ -3,9 +3,10 @@ parameters:
     paths:
         - .
     excludePaths:
-        - vendor
-        - node_modules
-        - build
-        - dist
-        - tests
+        analyseAndScan:
+            - vendor
+            - node_modules (?)
+            - build (?)
+            - dist (?)
+            - tests (?)
     treatPhpDocTypesAsCertain: false

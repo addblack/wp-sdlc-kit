@@ -1,0 +1,54 @@
+name: Release
+
+# Push a tag like v1.2.0 (or v1.2.0-rc.1 for a prerelease) to build a zip and publish a GitHub release.
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: composer
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install production PHP dependencies
+        run: |
+          if [ -f composer.json ]; then composer install --no-dev --optimize-autoloader --no-progress; fi
+
+      - name: Build assets
+        run: |
+          if [ -f package.json ]; then
+            if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+            npm run build --if-present
+          fi
+
+      - name: Package
+        run: |
+          SLUG="${GITHUB_REPOSITORY#*/}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p "dist/$SLUG"
+          rsync -a --exclude-from=.distignore ./ "dist/$SLUG/"
+          (cd dist && zip -qr "$SLUG-$VERSION.zip" "$SLUG")
+          echo "ZIP=dist/$SLUG-$VERSION.zip" >> "$GITHUB_ENV"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FLAGS=(--generate-notes)
+          case "$GITHUB_REF_NAME" in *-*) FLAGS+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" "$ZIP" "${FLAGS[@]}"

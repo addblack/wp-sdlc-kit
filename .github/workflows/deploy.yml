@@ -1,0 +1,113 @@
+name: Deploy
+
+# Syncs the repo to a server over SSH (rsync). The database and uploads are never touched.
+# Files listed in .distignore are not uploaded (and never deleted on the server).
+#
+# Secrets:   SSH_HOST, SSH_USER, SSH_PRIVATE_KEY, DEPLOY_PATH, SSH_PORT (optional)
+# Variables: DEPLOY_DIRS      optional, space separated paths relative to the repo root (default ".")
+#            POST_DEPLOY_CMD  optional, run on the server inside DEPLOY_PATH, e.g. "wp cache flush"
+#
+# Without the secrets the workflow only prints a warning and skips, so it is safe to commit first.
+# Always run once with dry_run=true before the first real deploy.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only show what would change, upload nothing'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
+      TARGET: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      DEPLOY_DIRS: ${{ vars.DEPLOY_DIRS || '.' }}
+      POST_DEPLOY_CMD: ${{ vars.POST_DEPLOY_CMD }}
+      DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+    steps:
+      - name: Check secrets
+        id: cfg
+        env:
+          HAS_CFG: ${{ secrets.SSH_PRIVATE_KEY != '' && secrets.SSH_HOST != '' && secrets.SSH_USER != '' && secrets.DEPLOY_PATH != '' }}
+        run: |
+          if [ "$HAS_CFG" = "true" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"
+          else echo "::warning::Deploy secrets are not set - skipping deploy."; echo "ok=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Checkout
+        if: steps.cfg.outputs.ok == 'true'
+        uses: actions/checkout@v4
+
+      - name: PHP lint
+        if: steps.cfg.outputs.ok == 'true'
+        run: |
+          find . -name '*.php' -not -path './vendor/*' -not -path './node_modules/*' -print0 \
+            | xargs -0 -n1 php -l > /dev/null
+
+      - name: Install production dependencies
+        if: steps.cfg.outputs.ok == 'true'
+        run: |
+          if [ -f composer.json ] && grep -q '"require"' composer.json; then
+            composer install --no-dev --optimize-autoloader --no-progress
+          fi
+          if [ -f package.json ] && grep -q '"build"' package.json; then
+            if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+            npm run build
+          fi
+
+      - name: Setup SSH
+        if: steps.cfg.outputs.ok == 'true'
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "RSH=ssh -i $HOME/.ssh/deploy_key -p $SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Check target
+        if: steps.cfg.outputs.ok == 'true'
+        run: |
+          [ "${#DEPLOY_PATH}" -gt 10 ] || { echo "::error::DEPLOY_PATH looks unsafe: $DEPLOY_PATH"; exit 1; }
+          $RSH "$TARGET" "test -d '$DEPLOY_PATH'" \
+            || { echo "::error::DEPLOY_PATH does not exist on the server"; exit 1; }
+
+      - name: Backup current code on the server
+        if: steps.cfg.outputs.ok == 'true' && env.DRY_RUN != '1'
+        run: |
+          $RSH "$TARGET" bash -s -- "$DEPLOY_PATH" "$DEPLOY_DIRS" <<'SH'
+          set -e
+          cd "$1"
+          mkdir -p ~/deploy-backups
+          tar czf ~/deploy-backups/deploy-$(date +%Y%m%d-%H%M%S).tgz $2
+          ls -1t ~/deploy-backups/deploy-*.tgz | tail -n +6 | xargs -r rm --
+          SH
+
+      - name: Upload (rsync)
+        if: steps.cfg.outputs.ok == 'true'
+        run: |
+          FLAGS=(-rlptzc --delete --itemize-changes --exclude-from=.distignore)
+          [ -n "$DRY_RUN" ] && FLAGS+=(--dry-run)
+          for dir in $DEPLOY_DIRS; do
+            echo "-> $dir"
+            rsync "${FLAGS[@]}" -e "$RSH" "./$dir/" "$TARGET:$DEPLOY_PATH/$dir/"
+          done
+
+      - name: Post-deploy command
+        if: steps.cfg.outputs.ok == 'true' && env.DRY_RUN != '1' && env.POST_DEPLOY_CMD != ''
+        run: $RSH "$TARGET" "cd '$DEPLOY_PATH' && $POST_DEPLOY_CMD"

@@ -1,0 +1,19 @@
+# Git hooks. Install with: npx lefthook install (runs automatically via npm "prepare").
+pre-commit:
+  parallel: true
+  commands:
+    php-syntax:
+      glob: "*.php"
+      run: for f in {staged_files}; do php -l "$f" > /dev/null || exit 1; done
+    phpcs:
+      glob: "*.php"
+      run: vendor/bin/phpcs {staged_files}
+
+commit-msg:
+  commands:
+    conventional-commits:
+      run: |
+        grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?: .+' {1} || {
+          echo "Use Conventional Commits, e.g. feat(admin): add settings page"
+          exit 1
+        }

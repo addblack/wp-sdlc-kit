@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and static analysis (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.3']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer
+          coverage: none
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: composer-${{ matrix.php }}-${{ hashFiles('composer.json', 'composer.lock') }}
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: PHP syntax
+        run: |
+          find . -name '*.php' -not -path './vendor/*' -not -path './node_modules/*' -print0 \
+            | xargs -0 -n1 -P4 php -l > /dev/null
+
+      - name: PHPCS (WordPress Coding Standards)
+        run: composer lint
+
+      - name: PHPStan
+        run: composer analyse
+
+  phpunit:
+    name: PHPUnit (wp-env)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect tests
+        id: detect
+        run: |
+          if [ -f phpunit.xml.dist ] && [ -d tests/php ]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: shivammathur/setup-php@v2
+        if: steps.detect.outputs.run == 'true'
+        with:
+          php-version: '8.2'
+          tools: composer
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.run == 'true'
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        if: steps.detect.outputs.run == 'true'
+        run: |
+          composer install --prefer-dist --no-progress
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Start wp-env
+        if: steps.detect.outputs.run == 'true'
+        run: npx wp-env start
+
+      - name: Run PHPUnit
+        if: steps.detect.outputs.run == 'true'
+        run: npx wp-env run tests-cli --env-cwd="wp-content/plugins/${{ github.event.repository.name }}" vendor/bin/phpunit -c phpunit.xml.dist
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect e2e tests
+        id: detect
+        run: |
+          if [ -f playwright.config.ts ] && ls tests/e2e/*.spec.ts > /dev/null 2>&1; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.run == 'true'
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        if: steps.detect.outputs.run == 'true'
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          npx playwright install --with-deps chromium
+
+      - name: Start wp-env
+        if: steps.detect.outputs.run == 'true'
+        run: npx wp-env start
+
+      - name: Run Playwright
+        if: steps.detect.outputs.run == 'true'
+        run: npx playwright test
+
+      - name: Upload report
+        if: failure() && steps.detect.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  plugin-check:
+    name: Plugin Check (WordPress.org rules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect plugin
+        id: detect
+        run: |
+          if grep -qs "Plugin Name:" ./*.php; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: shivammathur/setup-php@v2
+        if: steps.detect.outputs.run == 'true'
+        with:
+          php-version: '8.2'
+          tools: composer
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.run == 'true'
+        with:
+          node-version: 20
+
+      - name: Build the release folder
+        if: steps.detect.outputs.run == 'true'
+        run: |
+          if [ -f composer.json ]; then composer install --no-dev --optimize-autoloader --no-progress; fi
+          if [ -f package.json ]; then
+            if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+            npm run build --if-present
+          fi
+          SLUG="${GITHUB_REPOSITORY#*/}"
+          mkdir -p "$RUNNER_TEMP/build/$SLUG"
+          rsync -a --exclude-from=.distignore ./ "$RUNNER_TEMP/build/$SLUG/"
+          echo "BUILD_DIR=$RUNNER_TEMP/build/$SLUG" >> "$GITHUB_ENV"
+
+      - name: Run Plugin Check
+        if: steps.detect.outputs.run == 'true'
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: ${{ env.BUILD_DIR }}

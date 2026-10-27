@@ -12,6 +12,6 @@
 	"devDependencies": {
 		"@playwright/test": "^1.48.0",
 		"@wordpress/env": "^10.0.0",
-		"lefthook": "^1.8.0"
+		"lefthook": "^2.2.2"
 	}
 }

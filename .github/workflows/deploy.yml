@@ -49,7 +49,7 @@ jobs:
 
       - name: Checkout
         if: steps.cfg.outputs.ok == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: PHP lint
         if: steps.cfg.outputs.ok == 'true'

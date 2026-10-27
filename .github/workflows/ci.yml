@@ -21,7 +21,7 @@ jobs:
       matrix:
         php: ['8.1', '8.3']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -53,7 +53,7 @@ jobs:
     name: PHPUnit (wp-env)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Detect tests
         id: detect
@@ -90,7 +90,7 @@ jobs:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Detect e2e tests
         id: detect
@@ -128,7 +128,7 @@ jobs:
     name: Plugin Check (WordPress.org rules)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Detect plugin
         id: detect

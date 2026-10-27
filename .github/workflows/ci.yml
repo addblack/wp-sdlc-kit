@@ -67,7 +67,7 @@ jobs:
           tools: composer
           coverage: none
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.detect.outputs.run == 'true'
         with:
           node-version: 20
@@ -97,7 +97,7 @@ jobs:
         run: |
           if [ -f playwright.config.ts ] && ls tests/e2e/*.spec.ts > /dev/null 2>&1; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.detect.outputs.run == 'true'
         with:
           node-version: 20
@@ -142,7 +142,7 @@ jobs:
           tools: composer
           coverage: none
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.detect.outputs.run == 'true'
         with:
           node-version: 20
